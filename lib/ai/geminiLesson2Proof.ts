@@ -40,13 +40,16 @@ export async function analyzeLesson2Screenshot(input: {
   | { ok: true; verdict: Lesson2ProofVerdict }
   | { ok: false; reason: "missing_api_key" | "api_unavailable" | "parse_failed" }
 > {
-  if (!process.env.GEMINI_API_KEY) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  console.log("Ключ начинается на:", apiKey?.slice(0, 4));
+
+  if (!apiKey) {
     return { ok: false, reason: "missing_api_key" };
   }
 
   try {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
     const result = await model.generateContent([
       LESSON2_PROOF_PROMPT,
       { inlineData: { mimeType: input.mimeType, data: input.base64 } },
@@ -58,7 +61,13 @@ export async function analyzeLesson2Screenshot(input: {
     }
     return { ok: true, verdict };
   } catch (e) {
-    console.error("[gemini] analyzeLesson2Screenshot:", e);
+    console.error("[gemini] analyzeLesson2Screenshot full error:", e);
+    if (e instanceof Error) {
+      console.error("[gemini] message:", e.message);
+      console.error("[gemini] stack:", e.stack);
+    } else {
+      console.error("[gemini] non-Error payload:", JSON.stringify(e));
+    }
     return { ok: false, reason: "api_unavailable" };
   }
 }
