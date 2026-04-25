@@ -106,6 +106,7 @@ export async function POST(req: Request) {
 
   try {
     const update = await req.json();
+    if (!bot.isInited()) await bot.init();
     await bot.handleUpdate(update);
     return NextResponse.json({ status: "ok" });
   } catch (error) {
