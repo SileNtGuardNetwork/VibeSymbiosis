@@ -203,12 +203,12 @@ bot.on("message:photo", async (ctx) => {
 
     const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
     console.log("Telegram file URL:", fileUrl);
+    console.log("--- СТАДИЯ 1: Качаю файл...");
     const fileRes = await fetch(fileUrl);
-    if (!fileRes.ok) {
-      throw new Error(`Telegram file download failed: ${fileRes.status}`);
-    }
-
-    const buffer = Buffer.from(await fileRes.arrayBuffer());
+    if (!fileRes.ok) throw new Error("Ошибка скачивания: " + fileRes.status);
+    const arrayBuffer = await fileRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    console.log("--- СТАДИЯ 2: Файл в памяти, размер:", buffer.length);
     const mimeType = mimeTypeFromTelegramPath(file.file_path);
 
     const gemini = await analyzeLesson2Screenshot(buffer, mimeType);
@@ -283,7 +283,7 @@ bot.on("message:photo", async (ctx) => {
       await ctx.reply("Карта подтверждена! Пришли скрин успешной регистрации в VPN.");
     }
   } catch (e) {
-    console.error("[message:photo]", e);
+    console.error("ПОЛНАЯ ОШИБКА:", e);
     try {
       await ctx.reply(
         "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.",

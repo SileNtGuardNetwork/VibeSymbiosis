@@ -5,6 +5,7 @@ export async function analyzeLesson2Screenshot(imageBuffer: Buffer, mimeType: st
   if (!apiKey) return { is_valid: false, error: "missing_api_key" };
 
   try {
+    console.log("--- СТАДИЯ 3: Отправляю в Gemini 3...");
     const genAI = new GoogleGenerativeAI(apiKey);
     // Используем ТОЧНОЕ название модели, которое заработало у тебя в тестах
     const model = genAI.getGenerativeModel({ 
@@ -19,13 +20,13 @@ export async function analyzeLesson2Screenshot(imageBuffer: Buffer, mimeType: st
 
     const result = await model.generateContent([
       prompt,
-      { inlineData: { data: imageBuffer.toString("base64"), mimeType } }
+      { inlineData: { data: Buffer.from(imageBuffer).toString("base64"), mimeType } }
     ]);
 
     const text = result.response.text().replace(/```json|```/g, "").trim();
     return JSON.parse(text);
   } catch (error: any) {
-    console.error("[gemini] Error:", error.message);
+    console.error("ПОЛНАЯ ОШИБКА:", error);
     return { is_valid: false, error: "api_error" };
   }
 }
