@@ -2,6 +2,7 @@ import { Bot } from "grammy";
 import { NextResponse } from "next/server";
 import { analyzeLesson2Screenshot } from "@/lib/ai/geminiLesson2Proof";
 import { analyzeLesson3Text } from "@/lib/ai/geminiLesson3Offer";
+import { analyzeLesson4Link } from "@/lib/ai/geminiLesson4Link";
 import { supabase } from "@/lib/supabase/client";
 
 export const dynamic = "force-dynamic";
@@ -74,7 +75,7 @@ bot.on("message:text", async (ctx) => {
 
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id")
+      .select("id, current_lesson")
       .eq("telegram_id", telegramId)
       .maybeSingle();
 
@@ -84,28 +85,24 @@ bot.on("message:text", async (ctx) => {
       return;
     }
 
-    const { data: progress } = await supabase
-      .from("progress")
-      .select("lesson_number")
-      .eq("user_id", user.id)
-      .eq("status", "pending")
-      .order("lesson_number", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    console.log("--- ТЕКУЩИЙ УРОК ИЗ БАЗЫ:", progress?.lesson_number);
+    const currentLesson = Number(user.current_lesson ?? 1);
+    console.log("--- ТЕКУЩИЙ УРОК ИЗ БАЗЫ:", currentLesson);
 
     // Урок 3: принимаем текст оффера и оцениваем через Gemini.
-    const { data: lesson3, error: lesson3Err } = await supabase
-      .from("progress")
-      .select("id, deadline_at")
-      .eq("user_id", user.id)
-      .eq("lesson_number", 3)
-      .eq("status", "pending")
-      .maybeSingle();
+    if (currentLesson === 3) {
+      const { data: lesson3, error: lesson3Err } = await supabase
+        .from("progress")
+        .select("id, deadline_at")
+        .eq("user_id", user.id)
+        .eq("lesson_number", 3)
+        .eq("status", "pending")
+        .maybeSingle();
 
-    if (lesson3Err) throw lesson3Err;
-    if (lesson3) {
+      if (lesson3Err) throw lesson3Err;
+      if (!lesson3) {
+        await ctx.reply("Нет активного задания урока 3. Напиши /start или следуй подсказкам бота.");
+        return;
+      }
       try {
         const deadlineMs = new Date(lesson3.deadline_at).getTime();
         if (Number.isNaN(deadlineMs) || Date.now() > deadlineMs) {
@@ -149,8 +146,14 @@ bot.on("message:text", async (ctx) => {
         );
         if (lesson4Err) throw lesson4Err;
 
+        const { error: userLessonErr } = await supabase
+          .from("users")
+          .update({ current_lesson: 4 })
+          .eq("id", user.id);
+        if (userLessonErr) throw userLessonErr;
+
         await ctx.reply(
-          `🔥 Отлично! Оффер принят.\n${aiResult.feedback}\n\nУрок 4 открыт (текст урока добавим следующим шагом).`,
+          "🔥 Оффер — пушка! Мы в финале. Урок 4: Сборка воронки. Пришли мне ссылку на свой проект в v0.dev. Я проверю, чтобы верстка и смыслы соответствовали твоему Манифесту.",
         );
         return;
       } catch (err) {
@@ -159,69 +162,113 @@ bot.on("message:text", async (ctx) => {
       }
     }
 
-    let lesson1: { id: string; deadline_at: string } | null = null;
-    const { data: row, error: progErr } = await supabase
-      .from("progress")
-      .select("id, deadline_at")
-      .eq("user_id", user.id)
-      .eq("lesson_number", 1)
-      .eq("status", "pending")
-      .maybeSingle();
-    if (progErr) throw progErr;
-    lesson1 = row;
+    if (currentLesson === 1) {
+      let lesson1: { id: string; deadline_at: string } | null = null;
+      const { data: row, error: progErr } = await supabase
+        .from("progress")
+        .select("id, deadline_at")
+        .eq("user_id", user.id)
+        .eq("lesson_number", 1)
+        .eq("status", "pending")
+        .maybeSingle();
+      if (progErr) throw progErr;
+      lesson1 = row;
 
-    if (!text.toLowerCase().includes("http")) {
-      await ctx.reply("Пришли ссылку на свой проект v0.dev, чтобы открыть следующий урок.");
+      if (!text.toLowerCase().includes("http")) {
+        await ctx.reply("Пришли ссылку на свой проект v0.dev, чтобы открыть следующий урок.");
+        return;
+      }
+
+      if (!lesson1) {
+        await ctx.reply(
+          "Сейчас нет активного задания урока 1. Если ты уже сдал ссылку, следуй инструкциям для урока 2.",
+        );
+        return;
+      }
+
+      const deadlineMs = new Date(lesson1.deadline_at).getTime();
+      const overdue = Number.isNaN(deadlineMs) || Date.now() > deadlineMs;
+
+      if (overdue) {
+        const { error: failErr } = await supabase
+          .from("progress")
+          .update({ status: "failed" })
+          .eq("id", lesson1.id);
+        if (failErr) throw failErr;
+        await ctx.reply("Время вышло");
+        return;
+      }
+
+      const { error: updateErr } = await supabase
+        .from("progress")
+        .update({ status: "submitted", homework_url: text })
+        .eq("id", lesson1.id);
+      if (updateErr) throw updateErr;
+
+      const { error: userL2Err } = await supabase
+        .from("users")
+        .update({ current_lesson: 2 })
+        .eq("id", user.id);
+      if (userL2Err) throw userL2Err;
+
+      const vpnLink = process.env.VPN_REF_LINK ?? "";
+      const cardLink = process.env.CARD_REF_LINK ?? "";
+
+      await ctx.reply(
+        "🔥 Принято! Урок 2: Инфраструктура. Для работы тебе нужны: " +
+          `1. VPN (${vpnLink}), ` +
+          `2. Зарубежная карта (${cardLink}), ` +
+          "3. Чистый Google-аккаунт. Пришли скрины регистраций!",
+      );
+
+      const lesson2Deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const { error: lesson2Err } = await supabase.from("progress").upsert(
+        {
+          user_id: user.id,
+          lesson_number: 2,
+          status: "pending",
+          deadline_at: lesson2Deadline,
+        },
+        { onConflict: "user_id,lesson_number" },
+      );
+      if (lesson2Err) throw lesson2Err;
       return;
     }
 
-    if (!lesson1) {
+    if (currentLesson === 2) {
       await ctx.reply(
-        "Сейчас нет активного задания урока 1. Если ты уже сдал ссылку, следуй инструкциям для урока 2.",
+        "Сейчас урок 2 — пришли скриншоты VPN и карты (фото), текст на этом шаге не принимается.",
       );
       return;
     }
 
-    const deadlineMs = new Date(lesson1.deadline_at).getTime();
-    const overdue = Number.isNaN(deadlineMs) || Date.now() > deadlineMs;
+    if (currentLesson === 4) {
+      const normalized = text.toLowerCase();
+      const hasV0ProjectLink =
+        normalized.includes("v0.dev/chat/") || normalized.includes("v0.dev/design/");
+      if (!hasV0ProjectLink) {
+        await ctx.reply("Для завершения курса пришли ссылку на свой лендинг в v0.dev");
+        return;
+      }
 
-    if (overdue) {
-      const { error: failErr } = await supabase
-        .from("progress")
-        .update({ status: "failed" })
-        .eq("id", lesson1.id);
-      if (failErr) throw failErr;
-      await ctx.reply("Время вышло");
+      const lesson4Result = await analyzeLesson4Link(text);
+      if (lesson4Result.error) {
+        await ctx.reply("Сервис проверки ссылки временно недоступен. Попробуй ещё раз позже.");
+        return;
+      }
+
+      if (!lesson4Result.is_valid) {
+        await ctx.reply("Для завершения курса пришли ссылку на свой лендинг в v0.dev");
+        return;
+      }
+
+      await ctx.reply(
+        lesson4Result.feedback || "Крутой дизайн! Воронка готова к запуску.",
+      );
       return;
     }
 
-    const { error: updateErr } = await supabase
-      .from("progress")
-      .update({ status: "submitted", homework_url: text })
-      .eq("id", lesson1.id);
-    if (updateErr) throw updateErr;
-
-    const vpnLink = process.env.VPN_REF_LINK ?? "";
-    const cardLink = process.env.CARD_REF_LINK ?? "";
-
-    await ctx.reply(
-      "🔥 Принято! Урок 2: Инфраструктура. Для работы тебе нужны: " +
-        `1. VPN (${vpnLink}), ` +
-        `2. Зарубежная карта (${cardLink}), ` +
-        "3. Чистый Google-аккаунт. Пришли скрины регистраций!",
-    );
-
-    const lesson2Deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    const { error: lesson2Err } = await supabase.from("progress").upsert(
-      {
-        user_id: user.id,
-        lesson_number: 2,
-        status: "pending",
-        deadline_at: lesson2Deadline,
-      },
-      { onConflict: "user_id,lesson_number" },
-    );
-    if (lesson2Err) throw lesson2Err;
+    await ctx.reply("Следуй текущему шагу курса или нажми /start.");
   } catch (e) {
     console.error(e);
   }
@@ -234,13 +281,19 @@ bot.on("message:photo", async (ctx) => {
 
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id")
+      .select("id, current_lesson")
       .eq("telegram_id", telegramId)
       .maybeSingle();
 
     if (userErr) throw userErr;
     if (!user?.id) {
       await ctx.reply("Сначала нажми /start.");
+      return;
+    }
+
+    const photoLesson = Number(user.current_lesson ?? 1);
+    if (photoLesson !== 2) {
+      await ctx.reply("Скрины принимаются только на уроке 2. Следуй текущему шагу курса.");
       return;
     }
 
@@ -361,6 +414,12 @@ bot.on("message:photo", async (ctx) => {
         { onConflict: "user_id,lesson_number" },
       );
       if (l3Err) throw l3Err;
+
+      const { error: userL3Err } = await supabase
+        .from("users")
+        .update({ current_lesson: 3 })
+        .eq("id", user.id);
+      if (userL3Err) throw userL3Err;
 
       await ctx.reply(
         "🔥 Оба скрина приняты! Урок 3 открыт. (Текст урока 3 — заглушка, добавим позже.)",
