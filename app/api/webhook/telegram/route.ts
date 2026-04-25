@@ -1,5 +1,9 @@
 import { Bot } from "grammy";
 import { NextResponse } from "next/server";
+import {
+  analyzeLesson2Screenshot,
+  mimeTypeFromTelegramPath,
+} from "@/lib/ai/geminiLesson2Proof";
 import { supabase } from "@/lib/supabase/client";
 
 export const dynamic = "force-dynamic";
@@ -140,6 +144,144 @@ bot.on("message:text", async (ctx) => {
     if (lesson2Err) throw lesson2Err;
   } catch (e) {
     console.error(e);
+  }
+});
+
+bot.on("message:photo", async (ctx) => {
+  try {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const { data: user, error: userErr } = await supabase
+      .from("users")
+      .select("id")
+      .eq("telegram_id", telegramId)
+      .maybeSingle();
+
+    if (userErr) throw userErr;
+    if (!user?.id) {
+      await ctx.reply("Сначала нажми /start.");
+      return;
+    }
+
+    const { data: lesson2, error: l2Err } = await supabase
+      .from("progress")
+      .select("id, deadline_at, vpn_proof_verified, card_proof_verified, status")
+      .eq("user_id", user.id)
+      .eq("lesson_number", 2)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (l2Err) throw l2Err;
+    if (!lesson2) {
+      await ctx.reply("Скрины для урока 2 сейчас не принимаются. Следуй текущему шагу задания.");
+      return;
+    }
+
+    const deadlineMs = new Date(lesson2.deadline_at).getTime();
+    if (Number.isNaN(deadlineMs) || Date.now() > deadlineMs) {
+      await supabase.from("progress").update({ status: "failed" }).eq("id", lesson2.id);
+      await ctx.reply("Время вышло");
+      return;
+    }
+
+    const photos = ctx.message.photo;
+    const largest = photos[photos.length - 1];
+    const file = await ctx.api.getFile(largest.file_id);
+    if (!file.file_path) {
+      throw new Error("Telegram file_path missing");
+    }
+
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const fileRes = await fetch(fileUrl);
+    if (!fileRes.ok) {
+      throw new Error(`Telegram file download failed: ${fileRes.status}`);
+    }
+
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+    const base64 = buffer.toString("base64");
+    const mimeType = mimeTypeFromTelegramPath(file.file_path);
+
+    const gemini = await analyzeLesson2Screenshot({ base64, mimeType });
+    if (!gemini.ok) {
+      const msg =
+        gemini.reason === "missing_api_key"
+          ? "Проверка скринов настроена не полностью. Обратись к администратору."
+          : gemini.reason === "parse_failed"
+            ? "Не удалось разобрать ответ проверки. Попробуй отправить скрин ещё раз."
+            : "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.";
+      await ctx.reply(msg);
+      return;
+    }
+
+    const verdict = gemini.verdict;
+    if (!verdict.is_valid || verdict.type === "other") {
+      await ctx.reply(
+        "Скрин не прошёл проверку. Пришли чёткий скрин успешной регистрации в VPN или оплаты/выпуска зарубежной карты.",
+      );
+      return;
+    }
+
+    const vpnDone = Boolean(lesson2.vpn_proof_verified);
+    const cardDone = Boolean(lesson2.card_proof_verified);
+
+    if (verdict.type === "vpn" && vpnDone) {
+      await ctx.reply("VPN уже засчитан. Пришли скрин по карте, если ещё не отправлял.");
+      return;
+    }
+    if (verdict.type === "card" && cardDone) {
+      await ctx.reply("Карта уже засчитана. Пришли скрин по VPN, если ещё не отправлял.");
+      return;
+    }
+
+    const nextVpn = verdict.type === "vpn" ? true : vpnDone;
+    const nextCard = verdict.type === "card" ? true : cardDone;
+
+    const { error: updErr } = await supabase
+      .from("progress")
+      .update({
+        vpn_proof_verified: nextVpn,
+        card_proof_verified: nextCard,
+      })
+      .eq("id", lesson2.id);
+
+    if (updErr) throw updErr;
+
+    if (nextVpn && nextCard) {
+      await supabase.from("progress").update({ status: "submitted" }).eq("id", lesson2.id);
+
+      const lesson3Deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const { error: l3Err } = await supabase.from("progress").upsert(
+        {
+          user_id: user.id,
+          lesson_number: 3,
+          status: "pending",
+          deadline_at: lesson3Deadline,
+        },
+        { onConflict: "user_id,lesson_number" },
+      );
+      if (l3Err) throw l3Err;
+
+      await ctx.reply(
+        "🔥 Оба скрина приняты! Урок 3 открыт. (Текст урока 3 — заглушка, добавим позже.)",
+      );
+      return;
+    }
+
+    if (verdict.type === "vpn") {
+      await ctx.reply("VPN подтверждён! Пришли скрин по зарубежной карте (оплата или выпуск).");
+    } else {
+      await ctx.reply("Карта подтверждена! Пришли скрин успешной регистрации в VPN.");
+    }
+  } catch (e) {
+    console.error("[message:photo]", e);
+    try {
+      await ctx.reply(
+        "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.",
+      );
+    } catch {
+      /* ignore */
+    }
   }
 });
 
