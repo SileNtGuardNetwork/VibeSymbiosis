@@ -213,7 +213,7 @@ bot.on("message:photo", async (ctx) => {
 
     const aiResponse = await analyzeLesson2Screenshot(buffer, mimeType);
     console.log("--- ОТВЕТ ГЕМИНИ:", aiResponse);
-    if (!aiResponse?.is_valid) {
+    if (aiResponse?.error) {
       const msg =
         aiResponse?.error === "missing_api_key"
           ? "Проверка скринов настроена не полностью. Обратись к администратору."
@@ -221,6 +221,13 @@ bot.on("message:photo", async (ctx) => {
             ? "Ошибка 404: Модель не найдена. Проверь регион Vercel"
             : "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.";
       await ctx.reply(msg);
+      return;
+    }
+    if (!aiResponse?.is_valid) {
+      const reason = String(aiResponse?.reason ?? "непонятный объект");
+      await ctx.reply(
+        `Упс! ИИ увидел на фото: ${reason}. Это не похоже на скриншот VPN или карты. Попробуй еще раз!`,
+      );
       return;
     }
 
