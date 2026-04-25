@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { NextResponse } from "next/server";
 import { analyzeLesson2Screenshot } from "@/lib/ai/geminiLesson2Proof";
+import { analyzeLesson3Text } from "@/lib/ai/geminiLesson3Offer";
 import { supabase } from "@/lib/supabase/client";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,8 @@ bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
     if (!text || text.startsWith("/")) return;
 
+    console.log("--- ПОЛУЧЕН ТЕКСТ:", ctx.message.text);
+
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
 
@@ -76,27 +79,99 @@ bot.on("message:text", async (ctx) => {
       .maybeSingle();
 
     if (userErr) throw userErr;
-
-    let lesson1: { id: string; deadline_at: string } | null = null;
-    if (user?.id) {
-      const { data: row, error: progErr } = await supabase
-        .from("progress")
-        .select("id, deadline_at")
-        .eq("user_id", user.id)
-        .eq("lesson_number", 1)
-        .eq("status", "pending")
-        .maybeSingle();
-      if (progErr) throw progErr;
-      lesson1 = row;
-    }
-
-    if (!text.toLowerCase().includes("http")) {
-      await ctx.reply("Пришли ссылку на свой проект v0.dev, чтобы открыть следующий урок.");
+    if (!user?.id) {
+      await ctx.reply("Сначала нажми /start, чтобы начать.");
       return;
     }
 
-    if (!user?.id) {
-      await ctx.reply("Сначала нажми /start, чтобы начать.");
+    const { data: progress } = await supabase
+      .from("progress")
+      .select("lesson_number")
+      .eq("user_id", user.id)
+      .eq("status", "pending")
+      .order("lesson_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    console.log("--- ТЕКУЩИЙ УРОК ИЗ БАЗЫ:", progress?.lesson_number);
+
+    // Урок 3: принимаем текст оффера и оцениваем через Gemini.
+    const { data: lesson3, error: lesson3Err } = await supabase
+      .from("progress")
+      .select("id, deadline_at")
+      .eq("user_id", user.id)
+      .eq("lesson_number", 3)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (lesson3Err) throw lesson3Err;
+    if (lesson3) {
+      try {
+        const deadlineMs = new Date(lesson3.deadline_at).getTime();
+        if (Number.isNaN(deadlineMs) || Date.now() > deadlineMs) {
+          const { error: failErr } = await supabase
+            .from("progress")
+            .update({ status: "failed" })
+            .eq("id", lesson3.id);
+          if (failErr) throw failErr;
+          await ctx.reply("Время вышло");
+          return;
+        }
+
+        const aiResult = await analyzeLesson3Text(text);
+        if (aiResult.error) {
+          await ctx.reply("Сервис проверки оффера временно недоступен. Попробуй ещё раз чуть позже.");
+          return;
+        }
+
+        if (!aiResult.is_valid) {
+          await ctx.reply(
+            `Оффер пока сырой. ${aiResult.feedback || "Добавь четкую выгоду и боль клиента."}`,
+          );
+          return;
+        }
+
+        const { error: lesson3SubmitErr } = await supabase
+          .from("progress")
+          .update({ status: "submitted" })
+          .eq("id", lesson3.id);
+        if (lesson3SubmitErr) throw lesson3SubmitErr;
+
+        const lesson4Deadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const { error: lesson4Err } = await supabase.from("progress").upsert(
+          {
+            user_id: user.id,
+            lesson_number: 4,
+            status: "pending",
+            deadline_at: lesson4Deadline,
+          },
+          { onConflict: "user_id,lesson_number" },
+        );
+        if (lesson4Err) throw lesson4Err;
+
+        await ctx.reply(
+          `🔥 Отлично! Оффер принят.\n${aiResult.feedback}\n\nУрок 4 открыт (текст урока добавим следующим шагом).`,
+        );
+        return;
+      } catch (err) {
+        console.error("!!! КРИТИЧЕСКАЯ ОШИБКА В УРОКЕ 3:", err);
+        throw err;
+      }
+    }
+
+    let lesson1: { id: string; deadline_at: string } | null = null;
+    const { data: row, error: progErr } = await supabase
+      .from("progress")
+      .select("id, deadline_at")
+      .eq("user_id", user.id)
+      .eq("lesson_number", 1)
+      .eq("status", "pending")
+      .maybeSingle();
+    if (progErr) throw progErr;
+    lesson1 = row;
+
+    if (!text.toLowerCase().includes("http")) {
+      await ctx.reply("Пришли ссылку на свой проект v0.dev, чтобы открыть следующий урок.");
       return;
     }
 
@@ -312,21 +387,24 @@ bot.on("message:photo", async (ctx) => {
 
 export async function POST(req: Request) {
   try {
+    console.log("=== НОВЫЙ ЗАПРОС ОТ TELEGRAM ===");
+    const body = await req.json();
+    console.log("BODY:", JSON.stringify(body, null, 2));
+
     const secretHeader = req.headers.get("x-telegram-bot-api-secret-token");
     if (secretHeader !== process.env.TELEGRAM_WEBHOOK_SECRET) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const update = await req.json();
-
     if (!bot.isInited()) {
       await bot.init();
     }
 
-    await bot.handleUpdate(update);
+    await bot.handleUpdate(body);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Webhook Error:", error);
-    return NextResponse.json({ error: "Internal Error" }, { status: 200 });
+    return NextResponse.json({ ok: true }, { status: 200 });
   }
 }
