@@ -36,11 +36,17 @@ function parseVerdict(raw: string): Lesson2ProofVerdict | null {
 export async function analyzeLesson2Screenshot(input: {
   base64: string;
   mimeType: string;
+  byteSize: number;
 }): Promise<
   | { ok: true; verdict: Lesson2ProofVerdict }
   | {
       ok: false;
-      reason: "missing_api_key" | "api_unavailable" | "parse_failed" | "model_not_found_404";
+      reason:
+        | "missing_api_key"
+        | "api_unavailable"
+        | "parse_failed"
+        | "model_not_found_404"
+        | "empty_file";
     }
 > {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -49,15 +55,43 @@ export async function analyzeLesson2Screenshot(input: {
   if (!apiKey) {
     return { ok: false, reason: "missing_api_key" };
   }
+  if (input.byteSize < 100) {
+    return { ok: false, reason: "empty_file" };
+  }
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const result = await model.generateContent([
-      LESSON2_PROOF_PROMPT,
-      { inlineData: { mimeType: input.mimeType, data: input.base64 } },
-    ]);
-    const text = result.response.text();
+    const modelNames = ["gemini-1.5-flash", "models/gemini-1.5-flash"] as const;
+    let text: string | null = null;
+
+    for (const modelName of modelNames) {
+      try {
+        const model = genAI.getGenerativeModel(
+          { model: modelName },
+          { apiVersion: "v1" },
+        );
+        const result = await model.generateContent([
+          LESSON2_PROOF_PROMPT,
+          { inlineData: { mimeType: input.mimeType, data: input.base64 } },
+        ]);
+        text = result.response.text();
+        break;
+      } catch (modelError) {
+        const modelErrorText =
+          modelError instanceof Error
+            ? `${modelError.message}\n${modelError.stack ?? ""}`
+            : JSON.stringify(modelError);
+        console.error(`[gemini] failed for model ${modelName}:`, modelErrorText);
+        if (!modelErrorText.includes("404")) {
+          throw modelError;
+        }
+      }
+    }
+
+    if (!text) {
+      return { ok: false, reason: "model_not_found_404" };
+    }
+
     const verdict = parseVerdict(text);
     if (!verdict) {
       return { ok: false, reason: "parse_failed" };

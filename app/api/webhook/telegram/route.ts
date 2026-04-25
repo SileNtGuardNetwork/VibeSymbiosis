@@ -193,7 +193,11 @@ bot.on("message:photo", async (ctx) => {
       throw new Error("Telegram file_path missing");
     }
 
-    const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    if (!process.env.TELEGRAM_BOT_TOKEN) {
+      throw new Error("TELEGRAM_BOT_TOKEN is not set before file download");
+    }
+
+    const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
     console.log("Telegram file URL:", fileUrl);
     const fileRes = await fetch(fileUrl);
     if (!fileRes.ok) {
@@ -204,11 +208,17 @@ bot.on("message:photo", async (ctx) => {
     const base64 = buffer.toString("base64");
     const mimeType = mimeTypeFromTelegramPath(file.file_path);
 
-    const gemini = await analyzeLesson2Screenshot({ base64, mimeType });
+    const gemini = await analyzeLesson2Screenshot({
+      base64,
+      mimeType,
+      byteSize: buffer.byteLength,
+    });
     if (!gemini.ok) {
       const msg =
         gemini.reason === "missing_api_key"
           ? "Проверка скринов настроена не полностью. Обратись к администратору."
+          : gemini.reason === "empty_file"
+            ? "Файл пустой или поврежден. Пришли скрин еще раз."
           : gemini.reason === "model_not_found_404"
             ? "Ошибка 404: Модель не найдена. Проверь регион Vercel"
           : gemini.reason === "parse_failed"
