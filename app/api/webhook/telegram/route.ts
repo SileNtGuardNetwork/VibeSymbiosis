@@ -194,6 +194,7 @@ bot.on("message:photo", async (ctx) => {
     }
 
     const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    console.log("Telegram file URL:", fileUrl);
     const fileRes = await fetch(fileUrl);
     if (!fileRes.ok) {
       throw new Error(`Telegram file download failed: ${fileRes.status}`);
@@ -208,6 +209,8 @@ bot.on("message:photo", async (ctx) => {
       const msg =
         gemini.reason === "missing_api_key"
           ? "Проверка скринов настроена не полностью. Обратись к администратору."
+          : gemini.reason === "model_not_found_404"
+            ? "Ошибка 404: Модель не найдена. Проверь регион Vercel"
           : gemini.reason === "parse_failed"
             ? "Не удалось разобрать ответ проверки. Попробуй отправить скрин ещё раз."
             : "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.";

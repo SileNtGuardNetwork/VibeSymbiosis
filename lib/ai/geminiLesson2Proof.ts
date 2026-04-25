@@ -38,7 +38,10 @@ export async function analyzeLesson2Screenshot(input: {
   mimeType: string;
 }): Promise<
   | { ok: true; verdict: Lesson2ProofVerdict }
-  | { ok: false; reason: "missing_api_key" | "api_unavailable" | "parse_failed" }
+  | {
+      ok: false;
+      reason: "missing_api_key" | "api_unavailable" | "parse_failed" | "model_not_found_404";
+    }
 > {
   const apiKey = process.env.GEMINI_API_KEY;
   console.log("Ключ начинается на:", apiKey?.slice(0, 4));
@@ -62,6 +65,11 @@ export async function analyzeLesson2Screenshot(input: {
     return { ok: true, verdict };
   } catch (e) {
     console.error("[gemini] analyzeLesson2Screenshot full error:", e);
+    const errorText =
+      e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : JSON.stringify(e);
+    if (errorText.includes("404")) {
+      return { ok: false, reason: "model_not_found_404" };
+    }
     if (e instanceof Error) {
       console.error("[gemini] message:", e.message);
       console.error("[gemini] stack:", e.stack);
