@@ -211,19 +211,28 @@ bot.on("message:photo", async (ctx) => {
     console.log("--- СТАДИЯ 2: Файл в памяти, размер:", buffer.length);
     const mimeType = mimeTypeFromTelegramPath(file.file_path);
 
-    const gemini = await analyzeLesson2Screenshot(buffer, mimeType);
-    if (!gemini?.is_valid) {
+    const aiResponse = await analyzeLesson2Screenshot(buffer, mimeType);
+    console.log("--- ОТВЕТ ГЕМИНИ:", aiResponse);
+    if (!aiResponse?.is_valid) {
       const msg =
-        gemini?.error === "missing_api_key"
+        aiResponse?.error === "missing_api_key"
           ? "Проверка скринов настроена не полностью. Обратись к администратору."
-          : gemini?.error === "model_not_found"
+          : aiResponse?.error === "model_not_found"
             ? "Ошибка 404: Модель не найдена. Проверь регион Vercel"
             : "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.";
       await ctx.reply(msg);
       return;
     }
 
-    const verdictType = gemini.type as "vpn" | "card" | "other";
+    const reasonText = String(aiResponse.reason ?? "").toLowerCase();
+    const verdictType: "vpn" | "card" | "other" = reasonText.includes("vpn")
+      ? "vpn"
+      : reasonText.includes("visa") ||
+          reasonText.includes("mastercard") ||
+          reasonText.includes("card") ||
+          reasonText.includes("карта")
+        ? "card"
+        : "other";
     if (verdictType === "other") {
       await ctx.reply(
         "Скрин не прошёл проверку. Пришли чёткий скрин успешной регистрации в VPN или оплаты/выпуска зарубежной карты.",
