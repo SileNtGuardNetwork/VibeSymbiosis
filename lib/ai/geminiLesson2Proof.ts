@@ -40,14 +40,12 @@ export async function analyzeLesson2Screenshot(input: {
   | { ok: true; verdict: Lesson2ProofVerdict }
   | { ok: false; reason: "missing_api_key" | "api_unavailable" | "parse_failed" }
 > {
-  const apiKey =
-    process.env.GEMINI_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) {
+  if (!process.env.GEMINI_API_KEY) {
     return { ok: false, reason: "missing_api_key" };
   }
 
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const result = await model.generateContent([
       LESSON2_PROOF_PROMPT,
