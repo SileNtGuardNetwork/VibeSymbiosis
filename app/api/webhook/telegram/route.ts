@@ -12,6 +12,7 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
 const bot = new Bot(token);
+console.log("Vercel Region:", process.env.VERCEL_REGION);
 
 bot.command("start", async (ctx) => {
   try {
