@@ -6,27 +6,30 @@ export async function analyzeLesson2Screenshot(imageBuffer: Buffer, mimeType: st
 
   try {
     console.log("--- СТАДИЯ 3: Отправляю в Gemini 3...");
+    console.log("--- МИМ-ТИП:", mimeType);
+    console.log("--- КЛЮЧ ЕСТЬ:", !!apiKey);
     const genAI = new GoogleGenerativeAI(apiKey);
     // Используем ТОЧНОЕ название модели, которое заработало у тебя в тестах
     const model = genAI.getGenerativeModel({ 
       model: "gemini-3-flash-preview"
     });
 
-    const prompt = `Ты — ассистент курса. Проанализируй изображение.
-    - Если это скриншот личного кабинета VPN — верни {"is_valid": true, "type": "vpn"}
-    - Если это зарубежная банковская карта — верни {"is_valid": true, "type": "card"}
-    - Иначе — верни {"is_valid": false, "type": "other"}
-    Отвечай ТОЛЬКО чистым JSON.`;
+    const prompt =
+      "Ты — робот-валидатор. Проверь картинку. Если это VPN или Карта — напиши ТОЛЬКО слово VALID. Если нет — слово INVALID.";
 
     const result = await model.generateContent([
       prompt,
       { inlineData: { data: Buffer.from(imageBuffer).toString("base64"), mimeType } }
     ]);
 
-    const text = result.response.text().replace(/```json|```/g, "").trim();
-    return JSON.parse(text);
+    const text = result.response.text().trim().toUpperCase();
+    if (text.includes("VALID")) {
+      return { is_valid: true, type: "vpn" as const };
+    }
+    return { is_valid: false, type: "other" as const };
   } catch (error: any) {
-    console.error("ПОЛНАЯ ОШИБКА:", error);
+    console.error("--- ГЕМИНИ ФЕЙЛ:", error);
+    if (error.response) console.error("--- ДЕТАЛИ ОТВЕТА:", JSON.stringify(error.response));
     return { is_valid: false, error: "api_error" };
   }
 }
