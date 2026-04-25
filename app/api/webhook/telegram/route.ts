@@ -1,9 +1,6 @@
 import { Bot } from "grammy";
 import { NextResponse } from "next/server";
-import {
-  analyzeLesson2Screenshot,
-  mimeTypeFromTelegramPath,
-} from "@/lib/ai/geminiLesson2Proof";
+import { analyzeLesson2Screenshot } from "@/lib/ai/geminiLesson2Proof";
 import { supabase } from "@/lib/supabase/client";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +10,13 @@ if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
 const bot = new Bot(token);
 console.log("Vercel Region:", process.env.VERCEL_REGION);
+
+function mimeTypeFromTelegramPath(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
 
 bot.command("start", async (ctx) => {
   try {
@@ -205,31 +209,22 @@ bot.on("message:photo", async (ctx) => {
     }
 
     const buffer = Buffer.from(await fileRes.arrayBuffer());
-    const base64 = buffer.toString("base64");
     const mimeType = mimeTypeFromTelegramPath(file.file_path);
 
-    const gemini = await analyzeLesson2Screenshot({
-      base64,
-      mimeType,
-      byteSize: buffer.byteLength,
-    });
-    if (!gemini.ok) {
+    const gemini = await analyzeLesson2Screenshot(buffer, mimeType);
+    if (!gemini?.is_valid) {
       const msg =
-        gemini.reason === "missing_api_key"
+        gemini?.error === "missing_api_key"
           ? "Проверка скринов настроена не полностью. Обратись к администратору."
-          : gemini.reason === "empty_file"
-            ? "Файл пустой или поврежден. Пришли скрин еще раз."
-          : gemini.reason === "model_not_found_404"
+          : gemini?.error === "model_not_found"
             ? "Ошибка 404: Модель не найдена. Проверь регион Vercel"
-          : gemini.reason === "parse_failed"
-            ? "Не удалось разобрать ответ проверки. Попробуй отправить скрин ещё раз."
             : "Сервис проверки временно недоступен. Попробуй отправить скрин ещё раз чуть позже.";
       await ctx.reply(msg);
       return;
     }
 
-    const verdict = gemini.verdict;
-    if (!verdict.is_valid || verdict.type === "other") {
+    const verdictType = gemini.type as "vpn" | "card" | "other";
+    if (verdictType === "other") {
       await ctx.reply(
         "Скрин не прошёл проверку. Пришли чёткий скрин успешной регистрации в VPN или оплаты/выпуска зарубежной карты.",
       );
@@ -239,17 +234,17 @@ bot.on("message:photo", async (ctx) => {
     const vpnDone = Boolean(lesson2.vpn_proof_verified);
     const cardDone = Boolean(lesson2.card_proof_verified);
 
-    if (verdict.type === "vpn" && vpnDone) {
+    if (verdictType === "vpn" && vpnDone) {
       await ctx.reply("VPN уже засчитан. Пришли скрин по карте, если ещё не отправлял.");
       return;
     }
-    if (verdict.type === "card" && cardDone) {
+    if (verdictType === "card" && cardDone) {
       await ctx.reply("Карта уже засчитана. Пришли скрин по VPN, если ещё не отправлял.");
       return;
     }
 
-    const nextVpn = verdict.type === "vpn" ? true : vpnDone;
-    const nextCard = verdict.type === "card" ? true : cardDone;
+    const nextVpn = verdictType === "vpn" ? true : vpnDone;
+    const nextCard = verdictType === "card" ? true : cardDone;
 
     const { error: updErr } = await supabase
       .from("progress")
@@ -282,7 +277,7 @@ bot.on("message:photo", async (ctx) => {
       return;
     }
 
-    if (verdict.type === "vpn") {
+    if (verdictType === "vpn") {
       await ctx.reply("VPN подтверждён! Пришли скрин по зарубежной карте (оплата или выпуск).");
     } else {
       await ctx.reply("Карта подтверждена! Пришли скрин успешной регистрации в VPN.");
