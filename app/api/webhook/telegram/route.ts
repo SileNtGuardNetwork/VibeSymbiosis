@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { analyzeLesson2Screenshot } from "@/lib/ai/geminiLesson2Proof";
 import { analyzeLesson3Text } from "@/lib/ai/geminiLesson3Offer";
 import { analyzeLesson4Link } from "@/lib/ai/geminiLesson4Link";
+import { assertFreeVisionAuditLimit, isFreeTariff } from "@/lib/safeops/vision-limit";
 import { supabase } from "@/lib/supabase/client";
 
 export const dynamic = "force-dynamic";
@@ -281,7 +282,7 @@ bot.on("message:photo", async (ctx) => {
 
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id, current_lesson")
+      .select("id, current_lesson, tier")
       .eq("telegram_id", telegramId)
       .maybeSingle();
 
@@ -338,6 +339,20 @@ bot.on("message:photo", async (ctx) => {
     const buffer = Buffer.from(arrayBuffer);
     console.log("--- СТАДИЯ 2: Файл в памяти, размер:", buffer.length);
     const mimeType = mimeTypeFromTelegramPath(file.file_path);
+
+    if (isFreeTariff(user.tier)) {
+      const limitResult = await assertFreeVisionAuditLimit({
+        userId: user.id,
+        telegramId,
+      });
+
+      if (!limitResult.allowed) {
+        await ctx.reply(
+          "Лимит бесплатных AI-проверок исчерпан. В Free доступно 5 проверок. Дальше — Pro.",
+        );
+        return;
+      }
+    }
 
     const aiResponse = await analyzeLesson2Screenshot(buffer, mimeType);
     console.log("--- ОТВЕТ ГЕМИНИ:", aiResponse);
