@@ -31,9 +31,15 @@ bot.command("start", async (ctx) => {
       .upsert(
         {
           telegram_id: telegramId,
-          username: ctx.from?.username || "unknown",
-          current_state: "start",
-          tier: "free",
+          telegram_username: ctx.from?.username ?? null,
+          first_name: ctx.from?.first_name ?? null,
+          last_name: ctx.from?.last_name ?? null,
+          language_code: ctx.from?.language_code ?? null,
+          current_lesson: 1,
+          current_lesson_status: "pending",
+          current_flow: "start",
+          tariff: "free",
+          last_active_at: new Date().toISOString(),
         },
         { onConflict: "telegram_id" },
       )
@@ -282,7 +288,7 @@ bot.on("message:photo", async (ctx) => {
 
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id, current_lesson, tier")
+      .select("id, current_lesson, tariff")
       .eq("telegram_id", telegramId)
       .maybeSingle();
 
@@ -340,7 +346,7 @@ bot.on("message:photo", async (ctx) => {
     console.log("--- СТАДИЯ 2: Файл в памяти, размер:", buffer.length);
     const mimeType = mimeTypeFromTelegramPath(file.file_path);
 
-    if (isFreeTariff(user.tier)) {
+    if (isFreeTariff(user.tariff)) {
       const limitResult = await assertFreeVisionAuditLimit({
         userId: user.id,
         telegramId,
